@@ -560,7 +560,7 @@ const BotIntents = discordgo.IntentGuilds |
 	discordgo.IntentDirectMessageTyping |
 	// Privileged intents
 	discordgo.IntentMessageContent |
-	//discordgo.IntentGuildPresences |
+	// discordgo.IntentGuildPresences is added in Connect() if bridge.presence is enabled.
 	discordgo.IntentGuildMembers
 
 func (user *User) Connect() error {
@@ -627,6 +627,9 @@ func (user *User) Connect() error {
 	}
 	if !session.IsUser {
 		session.Identify.Intents = BotIntents
+		if user.bridge.Config.Bridge.Presence {
+			session.Identify.Intents |= discordgo.IntentGuildPresences
+		}
 	}
 	session.EventHandler = user.eventHandlerSync
 
@@ -719,6 +722,8 @@ func (user *User) eventHandler(rawEvt any) {
 		user.messageAckHandler(evt)
 	case *discordgo.TypingStart:
 		user.typingStartHandler(evt)
+	case *discordgo.PresenceUpdate:
+		user.presenceUpdateHandler(evt)
 	case *discordgo.InteractionSuccess:
 		user.interactionSuccessHandler(evt)
 	case *discordgo.ThreadListSync:
@@ -828,6 +833,10 @@ func (user *User) readyHandler(r *discordgo.Ready) {
 	}
 
 	go user.subscribeGuilds(2 * time.Second)
+
+	if user.bridge.Config.Bridge.Presence {
+		user.syncPresenceSnapshot(r.Presences)
+	}
 
 	user.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
 }
@@ -1105,6 +1114,21 @@ func (user *User) guildCreateHandler(g *discordgo.GuildCreate) {
 		Bool("unavailable", g.Unavailable).
 		Msg("Got guild create event")
 	user.handleGuild(g.Guild, time.Now(), false)
+	if user.bridge.Config.Bridge.Presence {
+		user.syncPresenceSnapshot(g.Presences)
+	}
+}
+
+func (user *User) syncPresenceSnapshot(presences []*discordgo.Presence) {
+	for _, presence := range presences {
+		if presence == nil || presence.User == nil || presence.User.ID == "" {
+			continue
+		}
+		if DiscordStatusToMatrix(presence.Status) == event.PresenceOffline {
+			continue
+		}
+		user.bridge.GetPuppetByID(presence.User.ID).UpdatePresence(presence)
+	}
 }
 
 func (user *User) guildDeleteHandler(g *discordgo.GuildDelete) {
@@ -1374,6 +1398,17 @@ func (user *User) typingStartHandler(t *discordgo.TypingStart) {
 		return
 	}
 	portal.handleDiscordTyping(t)
+}
+
+func (user *User) presenceUpdateHandler(evt *discordgo.PresenceUpdate) {
+	if !user.bridge.Config.Bridge.Presence {
+		return
+	}
+	if evt.User == nil || evt.User.ID == "" || evt.User.ID == user.DiscordID {
+		return
+	}
+	puppet := user.bridge.GetPuppetByID(evt.User.ID)
+	puppet.UpdatePresence(&evt.Presence)
 }
 
 func (user *User) interactionSuccessHandler(s *discordgo.InteractionSuccess) {

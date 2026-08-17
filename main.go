@@ -20,6 +20,8 @@ import (
 	_ "embed"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"go.mau.fi/util/configupgrade"
 	"go.mau.fi/util/exsync"
@@ -77,6 +79,8 @@ type DiscordBridge struct {
 	puppetsByCustomMXID map[id.UserID]*Puppet
 	puppetsLock         sync.Mutex
 
+	presenceBusyUnsupported atomic.Bool
+
 	attachmentTransfers         *exsync.Map[attachmentKey, *exsync.ReturnableOnce[*database.File]]
 	parallelAttachmentSemaphore *semaphore.Weighted
 }
@@ -113,7 +117,32 @@ func (br *DiscordBridge) Start() {
 	}
 	br.DMA = newDirectMediaAPI(br)
 	br.WaitWebsocketConnected()
+	if br.Config.Bridge.Presence {
+		go br.presenceRefreshLoop()
+	}
 	go br.startUsers()
+}
+
+const presenceRefreshInterval = 20 * time.Second
+
+func (br *DiscordBridge) presenceRefreshLoop() {
+	ticker := time.NewTicker(presenceRefreshInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		br.refreshGhostPresence()
+	}
+}
+
+func (br *DiscordBridge) refreshGhostPresence() {
+	br.puppetsLock.Lock()
+	puppets := make([]*Puppet, 0, len(br.puppets))
+	for _, puppet := range br.puppets {
+		puppets = append(puppets, puppet)
+	}
+	br.puppetsLock.Unlock()
+	for _, puppet := range puppets {
+		puppet.refreshPresence()
+	}
 }
 
 func (br *DiscordBridge) Stop() {

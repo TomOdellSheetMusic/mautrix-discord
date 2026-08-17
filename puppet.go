@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/appservice"
 	"maunium.net/go/mautrix/bridge"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
 	"go.mau.fi/mautrix-discord/database"
@@ -29,6 +31,10 @@ type Puppet struct {
 	customUser   *User
 
 	syncLock sync.Mutex
+
+	presenceLock  sync.Mutex
+	lastPresence  event.Presence
+	lastStatusMsg string
 }
 
 var _ bridge.Ghost = (*Puppet)(nil)
@@ -382,5 +388,118 @@ func (puppet *Puppet) ResendContactInfo() {
 		puppet.log.Warn().Err(err).Msg("Failed to store custom contact info in profile")
 	} else {
 		puppet.ContactInfoSet = true
+	}
+}
+
+const PresenceBusy event.Presence = "org.matrix.msc3026.busy"
+
+func DiscordStatusToMatrix(status discordgo.Status) event.Presence {
+	switch status {
+	case discordgo.StatusOnline:
+		return event.PresenceOnline
+	case discordgo.StatusIdle, discordgo.StatusDoNotDisturb:
+		return PresenceBusy
+	case discordgo.StatusInvisible, discordgo.StatusOffline:
+		return event.PresenceOffline
+	default:
+		return event.PresenceOffline
+	}
+}
+
+func ExtractCustomStatus(presence *discordgo.Presence) string {
+	if presence == nil {
+		return ""
+	}
+	for _, activity := range presence.Activities {
+		if activity != nil && activity.Type == discordgo.ActivityTypeCustom {
+			return activity.State
+		}
+	}
+	for _, activity := range presence.Activities {
+		if activity == nil {
+			continue
+		}
+		switch activity.Type {
+		case discordgo.ActivityTypeGame,
+			discordgo.ActivityTypeStreaming,
+			discordgo.ActivityTypeListening,
+			discordgo.ActivityTypeWatching,
+			discordgo.ActivityTypeCompeting:
+			if activity.Name != "" {
+				return activity.Name
+			}
+		}
+	}
+	return ""
+}
+
+func (puppet *Puppet) SetPresence(presence event.Presence, statusMsg string) error {
+	intent := puppet.DefaultIntent()
+	err := intent.EnsureRegistered()
+	if err != nil {
+		return fmt.Errorf("failed to ensure registered: %w", err)
+	}
+	req := map[string]any{
+		"presence":   presence,
+		"status_msg": statusMsg,
+	}
+	url := intent.BuildClientURL("v3", "presence", puppet.MXID, "status")
+	_, err = intent.MakeRequest("PUT", url, req, nil)
+	return err
+}
+
+func (puppet *Puppet) UpdatePresence(presence *discordgo.Presence) {
+	if presence == nil || presence.User == nil || presence.User.ID == "" {
+		return
+	}
+	newPresence := DiscordStatusToMatrix(presence.Status)
+	newStatusMsg := ExtractCustomStatus(presence)
+	if newPresence == PresenceBusy && puppet.bridge.presenceBusyUnsupported.Load() {
+		newPresence = event.PresenceUnavailable
+	}
+
+	puppet.presenceLock.Lock()
+	defer puppet.presenceLock.Unlock()
+	if newPresence == puppet.lastPresence && newStatusMsg == puppet.lastStatusMsg {
+		return
+	}
+	puppet.lastPresence = newPresence
+	puppet.lastStatusMsg = newStatusMsg
+
+	err := puppet.SetPresence(newPresence, newStatusMsg)
+	if err != nil {
+		if newPresence == PresenceBusy && puppet.bridge.isInvalidPresenceError(err) {
+			puppet.bridge.presenceBusyUnsupported.Store(true)
+			puppet.log.Debug().Err(err).Msg("Homeserver doesn't support busy presence (MSC3026), falling back to unavailable")
+			puppet.lastPresence = event.PresenceUnavailable
+			if retryErr := puppet.SetPresence(event.PresenceUnavailable, newStatusMsg); retryErr != nil {
+				puppet.log.Warn().Err(retryErr).Msg("Failed to update presence after falling back from busy to unavailable")
+			}
+		} else {
+			puppet.log.Warn().Err(err).
+				Str("presence", string(newPresence)).
+				Str("status_msg", newStatusMsg).
+				Msg("Failed to update presence")
+		}
+	}
+}
+
+func (br *DiscordBridge) isInvalidPresenceError(err error) bool {
+	var httpErr mautrix.HTTPError
+	return errors.As(err, &httpErr) && httpErr.RespError != nil &&
+		httpErr.RespError.ErrCode == "M_UNKNOWN" && httpErr.RespError.Err == "Invalid presence state"
+}
+
+func (puppet *Puppet) refreshPresence() {
+	puppet.presenceLock.Lock()
+	defer puppet.presenceLock.Unlock()
+	if puppet.lastPresence == "" || puppet.lastPresence == event.PresenceOffline {
+		return
+	}
+	err := puppet.SetPresence(puppet.lastPresence, puppet.lastStatusMsg)
+	if err != nil {
+		puppet.log.Warn().Err(err).
+			Str("presence", string(puppet.lastPresence)).
+			Msg("Failed to refresh presence")
 	}
 }
