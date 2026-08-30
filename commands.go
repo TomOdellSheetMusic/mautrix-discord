@@ -65,6 +65,7 @@ func (br *DiscordBridge) RegisterCommands() {
 		cmdCreatePortal,
 		cmdSetRelay,
 		cmdUnsetRelay,
+		cmdEncrypt,
 		cmdGuilds,
 		cmdRejoinSpace,
 		cmdDeleteAllPortals,
@@ -540,6 +541,46 @@ func fnUnsetRelay(ce *WrappedCommandEvent) {
 	ce.Portal.RelayWebhookID = ""
 	ce.Portal.RelayWebhookSecret = ""
 	ce.Portal.Update()
+}
+
+var cmdEncrypt = &commands.FullHandler{
+	Func: wrapCommand(fnEncrypt),
+	Name: "encrypt",
+	Help: commands.HelpMeta{
+		Section:     HelpSectionPortalManagement,
+		Description: "Enable encryption for this chat. This is a one-way operation and cannot be undone. The Discord Bot will join this room.",
+	},
+	RequiresPortal:     true,
+	RequiresEventLevel: roomModerator,
+}
+
+func fnEncrypt(ce *WrappedCommandEvent) {
+	portal := ce.Portal
+	if portal.Encrypted {
+		ce.Reply("This chat is already encrypted")
+		return
+	}
+	if !portal.bridge.Config.Bridge.Encryption.Allow {
+		ce.Reply("Encryption is not enabled on this instance of the bridge")
+		return
+	}
+	_, err := portal.MainIntent().SendStateEvent(portal.MXID, event.StateEncryption, "", portal.GetEncryptionEventContent())
+	if err != nil {
+		portal.log.Warn().Err(err).Msg("Failed to enable encryption in room")
+		ce.Reply("Failed to enable encryption in room: %v", err)
+		return
+	}
+	portal.Encrypted = true
+	portal.Update()
+	if portal.IsPrivateChat() {
+		err = portal.bridge.Bot.EnsureJoined(portal.MXID, appservice.EnsureJoinedParams{BotOverride: portal.MainIntent().Client})
+		if err != nil {
+			portal.log.Err(err).Msg("Failed to ensure bridge bot is joined to encrypted private chat portal")
+			ce.Reply("Encryption enabled, but failed to invite the bridge bot: %v", err)
+			return
+		}
+	}
+	ce.Reply("Encryption enabled for this chat. This cannot be undone.")
 }
 
 var cmdGuilds = &commands.FullHandler{
