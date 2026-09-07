@@ -67,6 +67,7 @@ func DoUpgrade(helper *up.Helper) {
 	helper.Copy(up.Bool, "bridge", "presence")
 	helper.Copy(up.Str|up.Null, "bridge", "proxy")
 	helper.Copy(up.Str, "bridge", "cache_media")
+	helper.Copy(up.Str|up.Null, "bridge", "voice_room_icon_path")
 	helper.Copy(up.Bool, "bridge", "direct_media", "enabled")
 	helper.Copy(up.Str, "bridge", "direct_media", "server_name")
 	helper.Copy(up.Str|up.Null, "bridge", "direct_media", "well_known_response")

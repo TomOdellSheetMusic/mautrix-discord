@@ -199,6 +199,18 @@ func (guild *Guild) CreateMatrixRoom(user *User, meta *discordgo.Guild) error {
 		creationContent["m.federate"] = false
 	}
 
+	// The space is joinable by anyone (public join rule), but visibility is kept
+	// private so it doesn't get published to the public room directory. The
+	// actual channel rooms inside remain private and invite-only.
+	initialState = append(initialState, &event.Event{
+		Type: event.StateJoinRules,
+		Content: event.Content{
+			Parsed: &event.JoinRulesEventContent{
+				JoinRule: event.JoinRulePublic,
+			},
+		},
+	})
+
 	resp, err := guild.bridge.Bot.CreateRoom(&mautrix.ReqCreateRoom{
 		Visibility:      "private",
 		Name:            guild.Name,
