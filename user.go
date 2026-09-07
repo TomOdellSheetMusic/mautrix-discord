@@ -623,6 +623,18 @@ func (user *User) Connect() error {
 		Str("heartbeat_session", session.HeartbeatSession.ID.String()).
 		Logger()
 	session.Logger = func(msgL, caller int, format string, a ...interface{}) {
+		// PASSIVE_UPDATE_V2 is a read-state/voice-state sync event for large
+		// guilds the client isn't subscribed to. It carries no data the bridge
+		// needs, so drop the "unknown event" warning down to debug. The event
+		// type is passed as an argument, not part of the format string.
+		if msgL == discordgo.LogWarning && strings.Contains(format, "unknown event") {
+			for _, arg := range a {
+				if arg == "PASSIVE_UPDATE_V2" {
+					msgL = discordgo.LogDebug
+					break
+				}
+			}
+		}
 		userDiscordLog.WithLevel(discordToZeroLevel(msgL)).Caller(caller+1).Msgf(strings.TrimSpace(format), a...) // zerolog-allow-msgf
 	}
 	if !session.IsUser {
