@@ -1,0 +1,103 @@
+# Goreleaser configuration for mautrix-discord.
+# See https://goreleaser.com for documentation.
+version: 2
+
+project_name: mautrix-discord
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: mautrix-discord
+    main: .
+    binary: mautrix-discord
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.Tag={{ .Version }}
+      - -X main.Commit={{ .FullCommit }}
+      - -X 'main.BuildTime={{ .Date }}'
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - "386"
+      - arm
+    goarm:
+      - "6"
+      - "7"
+    ignore:
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+    overrides:
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=aarch64-linux-gnu-gcc
+      - goos: linux
+        goarch: arm
+        goarm: "7"
+        env:
+          - CC=arm-linux-gnueabihf-gcc
+      - goos: linux
+        goarch: arm
+        goarm: "6"
+        env:
+          - CC=arm-linux-gnueabi-gcc
+      - goos: windows
+        goarch: amd64
+        env:
+          - CC=x86_64-w64-mingw32-gcc
+      - goos: windows
+        goarch: "386"
+        env:
+          - CC=i686-w64-mingw32-gcc
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+      - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "windows" }}Windows
+      {{- else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+      - example-config.yaml
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: mautrix
+    name: discord
+  draft: true
+  prerelease: auto
