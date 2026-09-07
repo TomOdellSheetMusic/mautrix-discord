@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/skip2/go-qrcode"
@@ -63,6 +64,7 @@ func (br *DiscordBridge) RegisterCommands() {
 		cmdUnbridge,
 		cmdDeletePortal,
 		cmdCreatePortal,
+		cmdBridgeGuild,
 		cmdSetRelay,
 		cmdUnsetRelay,
 		cmdGuilds,
@@ -379,7 +381,15 @@ func fnRejoinSpace(ce *WrappedCommandEvent) {
 		user.ensureInvited(nil, user.GetDMSpaceRoom(), false, true)
 		ce.Reply("Invited you to your DM space ([link](%s))", user.GetDMSpaceRoom().URI(ce.Bridge.AS.HomeserverDomain).MatrixToURL())
 	} else if _, err := strconv.Atoi(ce.Args[0]); err == nil {
-		ce.Reply("Rejoining guild spaces is not yet implemented")
+		guild := ce.Bridge.GetGuildByID(ce.Args[0], false)
+		if guild == nil || guild.MXID == "" {
+			ce.Reply("That guild is not bridged (or not found)")
+			return
+		}
+		user.ensureInvited(nil, guild.MXID, false, true)
+		user.addGuildToSpace(guild, false, time.Now())
+		ce.Reply("Invited you to the %s space ([link](%s)). It will appear in your sidebar once you accept the invite.",
+			guild.Name, guild.MXID.URI(ce.Bridge.AS.HomeserverDomain).MatrixToURL())
 	} else {
 		ce.Reply("**Usage**: `$cmdprefix rejoin-space <guild ID/main/dms>`")
 		return
@@ -562,7 +572,9 @@ const fullGuildsHelp = smallGuildsHelp + `
 * **status** - View the list of guilds and their bridging status.
 * **bridge <_guild ID_> [--entire]** - Enable bridging for a guild. The --entire flag auto-creates portals for all channels.
 * **bridging-mode <_guild ID_> <_mode_>** - Set the mode for bridging messages and new channels in a guild.
-* **unbridge <_guild ID_>** - Unbridge a guild and delete all channel portal rooms.`
+* **unbridge <_guild ID_>** - Unbridge a guild and delete all channel portal rooms.
+
+To bridge a guild into its own standalone space (not nested under the Discord hub), with the channel layout order and voice rooms, use the bridge-guild command instead.`
 
 func fnGuilds(ce *WrappedCommandEvent) {
 	if len(ce.Args) == 0 {
@@ -824,6 +836,42 @@ func fnCreatePortal(ce *WrappedCommandEvent) {
 	} else {
 		ce.Reply("Portal created: [%s](%s)", portal.Name, portal.MXID.URI(portal.bridge.Config.Homeserver.Domain).MatrixToURL())
 	}
+}
+
+var cmdBridgeGuild = &commands.FullHandler{
+	Func: wrapCommand(fnBridgeGuildDiscordLayout),
+	Name: "bridge-guild",
+	Help: commands.HelpMeta{
+		Section:     HelpSectionPortalManagement,
+		Description: "Bridge a guild into its own standalone space (not under the Discord hub), copying the Discord channel layout order, with voice rooms for voice channels",
+		Args:        "<_guild ID_>",
+	},
+	RequiresLogin: true,
+}
+
+func fnBridgeGuildDiscordLayout(ce *WrappedCommandEvent) {
+	if len(ce.Args) != 1 {
+		ce.Reply("**Usage**: `$cmdprefix bridge-guild <guild ID>`")
+		return
+	}
+	guildID := ce.Args[0]
+	guild := ce.Bridge.GetGuildByID(guildID, false)
+	if guild == nil {
+		ce.Reply("Guild not found")
+		return
+	}
+	meta, err := ce.User.Session.State.Guild(guildID)
+	if err != nil {
+		ce.Reply("Failed to get guild info: %v", err)
+		return
+	}
+	err = ce.User.bridgeGuildLayout(guild, meta)
+	if err != nil {
+		ce.Reply("Failed to bridge guild: %v", err)
+		return
+	}
+	guildURL := guild.MXID.URI(ce.Bridge.AS.HomeserverDomain).MatrixToURL()
+	ce.Reply("Successfully bridged guild [%s](%s) into its own standalone space ordered like the Discord layout", html.EscapeString(guild.Name), guildURL)
 }
 
 var cmdDeletePortal = &commands.FullHandler{

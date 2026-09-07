@@ -46,6 +46,43 @@ type portalDiscordMessage struct {
 	thread *Thread
 }
 
+// roomTypeVoice is the room type used for bridged Discord voice and stage
+// channels, which always carry a text chat. Sable (and Element) treat rooms of
+// type org.matrix.msc3417.call as voice/video "call rooms", which is what we
+// use here so they render with the dedicated call UI.
+const roomTypeVoice = "org.matrix.msc3417.call"
+
+// voiceRoomAvatarPNG is a small speaker icon (base64-encoded PNG) used as the
+// hardcoded avatar for bridged Discord voice and stage channels, so they show a
+// speaker icon in clients like Sable/Element instead of a blank/empty avatar.
+const voiceRoomAvatarPNG = "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"
+
+// voiceRoomAvatarMXC caches the uploaded MXC for the speaker icon.
+var voiceRoomAvatarMXC id.ContentURI
+
+// ensureVoiceRoomAvatar uploads (once) and returns the speaker icon MXC.
+func (portal *Portal) ensureVoiceRoomAvatar(user *User) id.ContentURI {
+	if !voiceRoomAvatarMXC.IsEmpty() {
+		return voiceRoomAvatarMXC
+	}
+	data, err := base64.StdEncoding.DecodeString(voiceRoomAvatarPNG)
+	if err != nil {
+		portal.log.Warn().Err(err).Msg("Failed to decode hardcoded voice room avatar")
+		return id.ContentURI{}
+	}
+	req := mautrix.ReqUploadMedia{
+		ContentBytes: data,
+		ContentType:  "image/png",
+	}
+	uploaded, err := user.bridge.Bot.UploadMedia(req)
+	if err != nil {
+		portal.log.Warn().Err(err).Msg("Failed to upload hardcoded voice room avatar")
+		return id.ContentURI{}
+	}
+	voiceRoomAvatarMXC = uploaded.ContentURI
+	return voiceRoomAvatarMXC
+}
+
 type portalMatrixMessage struct {
 	evt  *event.Event
 	user *User
@@ -344,12 +381,16 @@ func (portal *Portal) getBridgeInfo() (string, CustomBridgeInfoContent) {
 	var roomType string
 	if portal.Type == discordgo.ChannelTypeDM || portal.Type == discordgo.ChannelTypeGroupDM {
 		roomType = "dm"
+	} else if portal.Type == discordgo.ChannelTypeGuildVoice || portal.Type == discordgo.ChannelTypeGuildStageVoice {
+		roomType = "discord.voice"
 	}
 	var roomTypeV2 string
 	if portal.Type == discordgo.ChannelTypeDM {
 		roomTypeV2 = "dm"
 	} else if portal.Type == discordgo.ChannelTypeGroupDM {
 		roomTypeV2 = "group_dm"
+	} else if portal.Type == discordgo.ChannelTypeGuildVoice || portal.Type == discordgo.ChannelTypeGuildStageVoice {
+		roomTypeV2 = "video"
 	}
 
 	return bridgeInfoStateKey, CustomBridgeInfoContent{bridgeInfo, roomType, roomTypeV2}
@@ -447,9 +488,30 @@ func (portal *Portal) CreateMatrixRoom(user *User, channel *discordgo.Channel) e
 		portal.AvatarSet = false
 	}
 
+	// Use the hardcoded speaker icon for voice and stage channels.
+	if portal.Type == discordgo.ChannelTypeGuildVoice || portal.Type == discordgo.ChannelTypeGuildStageVoice {
+		if avatarURL := portal.ensureVoiceRoomAvatar(user); !avatarURL.IsEmpty() {
+			portal.AvatarURL = avatarURL
+			if portal.shouldSetDMRoomMetadata() {
+				initialState = append(initialState, &event.Event{
+					Type: event.StateRoomAvatar,
+					Content: event.Content{Parsed: &event.RoomAvatarEventContent{
+						URL: portal.AvatarURL,
+					}},
+				})
+				portal.AvatarSet = true
+			}
+		}
+	}
+
 	creationContent := make(map[string]interface{})
 	if portal.Type == discordgo.ChannelTypeGuildCategory {
 		creationContent["type"] = event.RoomTypeSpace
+	} else if portal.Type == discordgo.ChannelTypeGuildVoice || portal.Type == discordgo.ChannelTypeGuildStageVoice {
+		// Discord voice and stage channels always carry a text chat, so bridge
+		// them as call rooms (room type org.matrix.msc3417.call) so Sable and
+		// Element render them with the dedicated voice/video call UI.
+		creationContent["type"] = roomTypeVoice
 	}
 	if !portal.bridge.Config.Bridge.FederateRooms {
 		creationContent["m.federate"] = false
@@ -480,16 +542,34 @@ func (portal *Portal) CreateMatrixRoom(user *User, channel *discordgo.Channel) e
 		})
 	}
 
+	var powerLevelOverride *event.PowerLevelsEventContent
+	if portal.Type == discordgo.ChannelTypeGuildVoice || portal.Type == discordgo.ChannelTypeGuildStageVoice {
+		// Call/video rooms need normal members to be able to send the call
+		// membership state events, otherwise clients (like Sable) refuse to let
+		// them join the voice chat. Element sets these to power level 0 when
+		// creating video rooms; the same applies to the legacy group call event.
+		callMemberPL := 0
+		powerLevelOverride = &event.PowerLevelsEventContent{
+			Events: map[string]int{
+				"org.matrix.msc4143.rtc.member":  callMemberPL,
+				"org.matrix.msc3401.call.member": callMemberPL,
+				// Keep the layout widget admin-only, mirroring Element's video rooms.
+				"im.vector.modular.widgets": 100,
+			},
+		}
+	}
+
 	req := &mautrix.ReqCreateRoom{
-		Visibility:      "private",
-		Name:            portal.Name,
-		Topic:           portal.Topic,
-		Invite:          invite,
-		Preset:          "private_chat",
-		IsDirect:        portal.IsPrivateChat(),
-		InitialState:    initialState,
-		CreationContent: creationContent,
-		RoomVersion:     "11",
+		Visibility:         "private",
+		Name:               portal.Name,
+		Topic:              portal.Topic,
+		Invite:             invite,
+		Preset:             "private_chat",
+		IsDirect:           portal.IsPrivateChat(),
+		InitialState:       initialState,
+		CreationContent:    creationContent,
+		PowerLevelOverride: powerLevelOverride,
+		RoomVersion:        "11",
 	}
 	if !portal.shouldSetDMRoomMetadata() && !portal.FriendNick {
 		req.Name = ""
@@ -2432,6 +2512,10 @@ func (portal *Portal) removeFromSpace() {
 }
 
 func (portal *Portal) addToSpace(mxid id.RoomID) bool {
+	return portal.addToSpaceWithOrder(mxid, "")
+}
+
+func (portal *Portal) addToSpaceWithOrder(mxid id.RoomID, order string) bool {
 	if portal.InSpace == mxid {
 		return false
 	}
@@ -2450,8 +2534,8 @@ func (portal *Portal) addToSpace(mxid id.RoomID) bool {
 	}
 
 	_, err = portal.bridge.Bot.SendStateEvent(mxid, event.StateSpaceChild, portal.MXID.String(), &event.SpaceChildEventContent{
-		Via: []string{portal.bridge.AS.HomeserverDomain},
-		// TODO order
+		Via:   []string{portal.bridge.AS.HomeserverDomain},
+		Order: order,
 	})
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to set m.space.child event in space")

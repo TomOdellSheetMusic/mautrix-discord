@@ -1593,6 +1593,86 @@ func (user *User) bridgeGuild(guildID string, everything bool) error {
 	return nil
 }
 
+// bridgeGuildLayout bridges a guild into a single standalone Matrix space and
+// recreates the Discord channel layout as that space's ordering. Every
+// bridgeable channel is placed directly in the guild space, and its
+// m.space.child order is set from the Discord channel position so the space
+// mirrors the layout of the Discord guild. Voice and stage channels are bridged
+// as voice rooms. Unlike the regular guild bridge, the space is NOT nested
+// under the user's main "Discord" hub space, so it appears as its own top-level
+// tab in the client sidebar.
+func (user *User) bridgeGuildLayout(guild *Guild, meta *discordgo.Guild) error {
+	err := guild.CreateMatrixRoom(user, meta)
+	if err != nil {
+		return err
+	}
+	log := user.log.With().Str("guild_id", guild.ID).Logger()
+	// Record the portal membership for persistence, but don't nest the guild
+	// space under the "Discord" hub space (unlike addGuildToSpace).
+	user.MarkInPortal(database.UserPortal{
+		DiscordID: guild.ID,
+		Type:      database.UserPortalTypeGuild,
+		Timestamp: time.Now(),
+		InSpace:   false,
+	})
+
+	// Auto-join the guild space with the user's custom puppet (if double puppeting
+	// is enabled), so the space stays in their space list instead of only sitting
+	// as an accepted-or-not invite.
+	if cp := user.bridge.GetPuppetByCustomMXID(user.MXID); cp != nil && cp.CustomIntent() != nil {
+		if err := cp.CustomIntent().EnsureJoined(guild.MXID, appservice.EnsureJoinedParams{IgnoreCache: true}); err != nil {
+			log.Warn().Err(err).Msg("Failed to auto-join user to guild space")
+		} else {
+			user.bridge.StateStore.SetMembership(guild.MXID, user.MXID, event.MembershipJoin)
+		}
+	}
+
+	// Collect all bridgeable channels and sort them by their Discord position,
+	// so the order in the guild space matches the layout of the Discord guild.
+	channels := make([]*discordgo.Channel, 0, len(meta.Channels))
+	for _, ch := range meta.Channels {
+		if user.channelIsBridgeable(ch) {
+			channels = append(channels, ch)
+		}
+	}
+	sort.Slice(channels, func(i, j int) bool {
+		return channels[i].Position < channels[j].Position
+	})
+
+	for i, ch := range channels {
+		portal := user.GetPortalByMeta(ch)
+		err = portal.CreateMatrixRoom(user, ch)
+		if err != nil {
+			log.Error().Err(err).Str("channel_id", ch.ID).
+				Msg("Failed to create room for channel while bridging guild layout")
+			continue
+		}
+		// Reuse the index as a zero-padded order so clients sort children by it.
+		order := fmt.Sprintf("%06d", i)
+		if !portal.addToSpaceWithOrder(guild.MXID, order) {
+			log.Error().Str("channel_id", ch.ID).Msg("Failed to add channel to guild space")
+		}
+	}
+
+	guild.BridgingMode = database.GuildBridgeEverything
+	guild.Update()
+
+	if user.Session.IsUser {
+		log.Debug().Msg("Subscribing to guild after bridging")
+		err = user.Session.SubscribeGuild(discordgo.GuildSubscribeData{
+			GuildID:    guild.ID,
+			Typing:     true,
+			Activities: true,
+			Threads:    true,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("Failed to subscribe to guild")
+		}
+	}
+
+	return nil
+}
+
 func (user *User) unbridgeGuild(guildID string) error {
 	if user.PermissionLevel < bridgeconfig.PermissionLevelAdmin && user.PortalHasOtherUsers(guildID) {
 		return errors.New("only bridge admins can unbridge guilds with other users")
