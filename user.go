@@ -623,6 +623,17 @@ func (user *User) Connect() error {
 		Str("heartbeat_session", session.HeartbeatSession.ID.String()).
 		Logger()
 	session.Logger = func(msgL, caller int, format string, a ...interface{}) {
+		// These events are not registered in discordgo and carry no data the
+		// bridge needs, so drop their "unknown event" warnings down to debug.
+		// The event type is passed as an argument, not part of the format string.
+		if msgL == discordgo.LogWarning && strings.Contains(format, "unknown event") {
+			for _, arg := range a {
+				switch arg {
+				case "PASSIVE_UPDATE_V2", "MESSAGE_REACTION_ADD_MANY", "SESSIONS_REPLACE":
+					msgL = discordgo.LogDebug
+				}
+			}
+		}
 		userDiscordLog.WithLevel(discordToZeroLevel(msgL)).Caller(caller+1).Msgf(strings.TrimSpace(format), a...) // zerolog-allow-msgf
 	}
 	if !session.IsUser {
