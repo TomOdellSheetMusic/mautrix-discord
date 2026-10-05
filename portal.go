@@ -1895,6 +1895,12 @@ func (portal *Portal) cleanup(puppetsOnly bool) {
 		if err != nil {
 			portal.log.Warn().Err(err).Msg("Failed to leave private chat portal with main intent")
 		}
+		// The bridge bot may have been invited to the DM when encryption was enabled.
+		// Make sure it leaves too, otherwise the room can't be fully cleaned up.
+		_, err = portal.bridge.Bot.LeaveRoom(portal.MXID)
+		if err != nil {
+			portal.log.Warn().Err(err).Msg("Failed to leave private chat portal with bridge bot")
+		}
 		return
 	}
 
